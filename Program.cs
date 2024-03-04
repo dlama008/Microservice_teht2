@@ -3,14 +3,16 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi.Models;
-using Microservice_Teht2.Data;
+using Microservice_teht2.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Lis‰‰ palvelut konteineriin.
 builder.Services.AddHttpClient();
 builder.Services.AddDbContext<ElectricityPriceDbContext>(options =>
-    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+{
+    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection"));
+});
 builder.Services.AddControllers();
 builder.Services.AddSwaggerGen(c =>
 {

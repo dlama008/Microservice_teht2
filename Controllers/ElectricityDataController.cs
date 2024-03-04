@@ -1,13 +1,16 @@
 using Microsoft.AspNetCore.Mvc;
-using Microservice_Teht2.Data;
 using Microservice_Teht2.Models;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
-using System.Net.Http;
 using Newtonsoft.Json;
+using Microsoft.Extensions.Logging;
+using System.Net.Http;
+using Microservice_teht2.DTO;
+using Microservice_teht2.Extensions;
+using Microservice_teht2.Models;
 
 namespace Microservice_Teht2.Controllers
 {
@@ -15,135 +18,76 @@ namespace Microservice_Teht2.Controllers
     [ApiController]
     public class ElectricityDataController : ControllerBase
     {
-        private readonly ElectricityPriceDbContext _context;
-        private readonly IHttpClientFactory _httpClientFactory;
+        private ElectricityPriceDbContext _electricityDbContext;
+        private ILogger<ElectricityDataController> _logger;
+        private readonly HttpClient _httpClient;
 
-        public ElectricityDataController(ElectricityPriceDbContext context, IHttpClientFactory httpClientFactory)
+        public ElectricityDataController(ElectricityPriceDbContext electricityDbContext, ILogger<ElectricityDataController> logger, IHttpClientFactory httpClientFactory)
         {
-            _context = context;
-            _httpClientFactory = httpClientFactory;
+            _electricityDbContext = electricityDbContext;
+            _logger = logger;
+            _httpClient = httpClientFactory.CreateClient();
         }
 
         [HttpPost]
-        public async Task<IActionResult> PostElectricityPrice([FromBody] ElectricityPriceInfo priceInfo)
+        public async Task<IActionResult> Post([FromBody] ElectricityPriceDataDtoIn data)
         {
-            if (!ModelState.IsValid)
+            if (data == null)
             {
-                return BadRequest(ModelState);
+                return BadRequest("Dataa ei vastaanotettu.");
             }
-
-            _context.ElectricityPrices.Add(priceInfo);
-            await _context.SaveChangesAsync();
-
-            return Created();
-        }
-
-        [HttpGet("{id}")]
-        public async Task<IActionResult> GetElectricityPrice(int id)
-        {
-            var priceInfo = await _context.ElectricityPrices.FindAsync(id);
-            if (priceInfo == null)
-            {
-                return NotFound();
-            }
-            return Ok(priceInfo);
-        }
-
-        [HttpGet]
-        public async Task<IActionResult> GetElectricityPrices()
-        {
-            var prices = await _context.ElectricityPrices.ToListAsync();
-            return Ok(prices);
-        }
-
-        [HttpPut("{id}")]
-        public async Task<IActionResult> UpdateElectricityPrice(int id, [FromBody] ElectricityPriceInfo priceInfo)
-        {
-            if (id != priceInfo.Id)
-            {
-                return BadRequest();
-            }
-
-            _context.Entry(priceInfo).State = EntityState.Modified;
 
             try
             {
-                await _context.SaveChangesAsync();
-            }
-            catch (DbUpdateConcurrencyException)
-            {
-                if (!_context.ElectricityPrices.Any(e => e.Id == id))
+                foreach (var hourPrice in data.Prices)
                 {
-                    return NotFound();
-                }
-                else
-                {
-                    throw;
-                }
-            }
+                    // Tarkista, onko tietokannassa jo tietuetta samalla p‰iv‰m‰‰r‰ll‰
+                    var isDuplicate = await _electricityDbContext.ElectricityPriceInfos.AnyAsync(x =>
+                        x.StartDate == hourPrice.StartDate && x.EndDate == hourPrice.EndDate);
 
-            return NoContent();
-        }
-
-        [HttpDelete("{id}")]
-        public async Task<IActionResult> DeleteElectricityPrice(int id)
-        {
-            var priceInfo = await _context.ElectricityPrices.FindAsync(id);
-            if (priceInfo == null)
-            {
-                return NotFound();
-            }
-
-            _context.ElectricityPrices.Remove(priceInfo);
-            await _context.SaveChangesAsync();
-
-            return NoContent();
-        }
-
-        // GET: api/ElectricityData/range
-        [HttpGet("range")]
-        public IActionResult GetPricesByDateRange(DateTime startDate, DateTime endDate)
-        {
-            var prices = _context.ElectricityPrices
-                                 .Where(p => p.StartDate >= startDate && p.EndDate <= endDate)
-                                 .ToList();
-            if (!prices.Any())
-            {
-                return NotFound("Ei lˆytynyt hintatietoja annetulta aikav‰lilt‰.");
-            }
-
-            return Ok(prices);
-        }
-
-        // Lis‰ys: Hae dataa toiselta mikropalvelulta ja tallenna se tietokantaan
-        [HttpPost("fetch-and-store")]
-        public async Task<IActionResult> FetchAndStoreData()
-        {
-            try
-            {
-                var client = _httpClientFactory.CreateClient();
-                var response = await client.GetAsync("https://localhost:7034/api/ElectricityData"); // Osoita oikea endpoint
-                response.EnsureSuccessStatusCode();
-
-                var content = await response.Content.ReadAsStringAsync();
-                var pricesContainer = JsonConvert.DeserializeObject<List<ElectricityPriceInfo>>(content);
-
-                if (pricesContainer != null)
-                {
-                    foreach (var priceInfo in pricesContainer)
+                    if (!isDuplicate)
                     {
-                        _context.ElectricityPrices.Add(priceInfo);
+                        // Jos samalla p‰iv‰m‰‰r‰ll‰ ei ole tietuetta, lis‰‰ uusi tietue
+                        _electricityDbContext.ElectricityPriceInfos.Add(hourPrice.ToEntity());
                     }
-                    await _context.SaveChangesAsync();
-                    return Ok("Data fetched and stored successfully.");
+                    else
+                    {
+                        _logger.LogInformation($"Duplikaatti havaittu, ei tallenneta uudestaan: {hourPrice.StartDate} - {hourPrice.EndDate}");
+                    }
                 }
 
-                return NotFound("Data not found or unable to deserialize.");
+                await _electricityDbContext.SaveChangesAsync();
             }
             catch (Exception ex)
             {
-                return StatusCode(500, $"Internal server error: {ex.Message}");
+                _logger.LogError("Virhe tallennettaessa dataa tietokantaan: " + ex.ToString());
+                return StatusCode(StatusCodes.Status500InternalServerError, "Virhe tallennettaessa dataa tietokantaan.");
+            }
+
+            return Ok("Data vastaanotettu ja k‰sitelty.");
+        }
+
+        //POISTA
+        [HttpDelete("DeleteByDate")]
+        public async Task<IActionResult> DeleteByDate(DateTime startDate, DateTime endDate)
+        {
+            try
+            {
+                // Etsi poistettavat tietueet
+                var recordsToDelete = await _electricityDbContext.ElectricityPriceInfos.Where(x => x.StartDate >= startDate && x.EndDate <= endDate).ToListAsync();
+
+                // Poista tietueet
+                _electricityDbContext.ElectricityPriceInfos.RemoveRange(recordsToDelete);
+                await _electricityDbContext.SaveChangesAsync();
+
+                return Ok("Data poistettu tietokannasta.");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError("Virhe poistettaessa dataa tietokannasta: " + ex.ToString());
+                return StatusCode(StatusCodes.Status500InternalServerError, "Virhe poistettaessa dataa tietokannasta.");
             }
         }
+
     }
 }

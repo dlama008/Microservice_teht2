@@ -11,11 +11,14 @@ using System.Net.Http;
 using Microservice_teht2.DTO;
 using Microservice_teht2.Extensions;
 using Microservice_teht2.Models;
+using Microservice_teht2;
 
 namespace Microservice_Teht2.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
+
+
     public class ElectricityDataController : ControllerBase
     {
         private ElectricityPriceDbContext _electricityDbContext;
@@ -86,6 +89,106 @@ namespace Microservice_Teht2.Controllers
             {
                 _logger.LogError("Virhe poistettaessa dataa tietokannasta: " + ex.ToString());
                 return StatusCode(StatusCodes.Status500InternalServerError, "Virhe poistettaessa dataa tietokannasta.");
+            }
+        }
+        //HINTA AIKAVÄLILLÄ
+
+        [HttpGet("GetElectricityPricesFromRange")]
+        public async Task<IActionResult> GetElectricityPricesFromRange([FromQuery] DateTime startDate, [FromQuery] DateTime endDate, [FromQuery] int pageSize = 10, [FromQuery] int page = 1)
+        {
+            if (startDate >= endDate)
+            {
+                return BadRequest("Start date must be before end date.");
+            }
+
+            try
+            {
+                int skip = (page - 1) * pageSize;
+                var electricityPrices = await _electricityDbContext.ElectricityPriceInfos
+                .Where(x => x.StartDate >= startDate && x.StartDate < endDate.AddDays(1))
+                .OrderBy(x => x.StartDate)
+                .Skip(skip)
+                .Take(pageSize)
+                .ToListAsync();
+
+
+                return Ok(electricityPrices);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError($"Error fetching data from database: {ex.Message}", ex);
+                return StatusCode(StatusCodes.Status500InternalServerError, "Error occurred while fetching the electricity prices.");
+            }
+        }
+        //HINTAERO AIKAVÄLILLÄ
+
+        [HttpGet("GetPriceDifferenceFromRange")]
+        public async Task<IActionResult> GetPriceDifferenceFromRange([FromQuery] DateTime startDate, [FromQuery] DateTime endDate, [FromQuery] decimal fixedPrice)
+        {
+            if (startDate >= endDate)
+            {
+                return BadRequest("Start date must be before end date.");
+            }
+
+            try
+            {
+                var electricityPrices = await _electricityDbContext.ElectricityPriceInfos
+                    .Where(x => x.StartDate >= startDate && x.EndDate <= endDate)
+                    .OrderBy(x => x.StartDate)
+                    .ToListAsync();
+
+                var priceDifferences = electricityPrices.Select(priceInfo =>
+                    new PriceDifferenceDto
+                    {
+                        StartDate = priceInfo.StartDate,
+                        EndDate = priceInfo.EndDate,
+                        PriceDifferenceValue = Math.Round(priceInfo.Price - fixedPrice, 3),
+                        CheaperContract = priceInfo.Price > fixedPrice ? ElectricityContractType.MarketPrice : ElectricityContractType.FixedPrice
+                    }).ToList();
+
+                return Ok(priceDifferences);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError($"Error calculating price differences: {ex.Message}", ex);
+                return StatusCode(StatusCodes.Status500InternalServerError, "Error occurred while calculating the price differences.");
+            }
+        }
+
+        //BONARI
+        //TUNNEITTAIN HINTAERO
+        [HttpGet("GetHourlyPriceDifferences")]
+        public async Task<IActionResult> GetHourlyPriceDifferences([FromQuery] DateTime startDate, [FromQuery] DateTime endDate, [FromQuery] decimal fixedPrice)
+        {
+            if (startDate >= endDate)
+            {
+                return BadRequest("Start date must be before end date.");
+            }
+
+            try
+            {
+                var hourlyPrices = await _electricityDbContext.ElectricityPriceInfos
+                    .Where(x => x.StartDate >= startDate && x.EndDate <= endDate)
+                    .OrderBy(x => x.StartDate)
+                    .ToListAsync();
+
+                var hourlyDifferences = hourlyPrices
+                    .Select(hourPrice => new HourlyPriceDifferenceDto
+                    {
+                        StartDate = hourPrice.StartDate,
+                        EndDate = hourPrice.EndDate,
+                        MarketPrice = hourPrice.Price,
+                        FixedPrice = fixedPrice,
+                        Difference = Math.Round(hourPrice.Price - fixedPrice, 3)
+                    })
+                    .ToList();
+
+                return Ok(hourlyDifferences);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError($"Error calculating hourly price differences: {ex.Message}", ex);
+                return StatusCode(StatusCodes.Status500InternalServerError, "Error occurred while calculating the hourly price differences.");
             }
         }
 
